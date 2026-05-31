@@ -688,6 +688,39 @@ impl<const SSL: bool> NewSocket<SSL> {
         Ok(JSValue::from(this.socket.get().set_no_delay(enabled)))
     }
 
+    /// `_handle.setTypeOfService(tos)` - returns 0 on success or a negative
+    /// platform errno (Node's TCPWrap::SetTypeOfService convention, so the JS
+    /// layer can hand it to ErrnoException).
+    #[bun_jsc::host_fn(method)]
+    pub fn set_type_of_service(
+        this: &Self,
+        _global: &JSGlobalObject,
+        callframe: &CallFrame,
+    ) -> JsResult<JSValue> {
+        jsc::mark_binding!();
+        let args = callframe.arguments_old::<1>();
+        let tos: i32 = if args.len >= 1 {
+            args.ptr[0].to_int32()
+        } else {
+            0
+        };
+        log!("setTypeOfService({})", tos);
+        Ok(JSValue::from(this.socket.get().set_tos(tos)))
+    }
+
+    /// `_handle.getTypeOfService()` - returns the value (>= 0) or a negative
+    /// platform errno.
+    #[bun_jsc::host_fn(method)]
+    pub fn get_type_of_service(
+        this: &Self,
+        _global: &JSGlobalObject,
+        _callframe: &CallFrame,
+    ) -> JsResult<JSValue> {
+        jsc::mark_binding!();
+        log!("getTypeOfService()");
+        Ok(JSValue::from(this.socket.get().get_tos()))
+    }
+
     pub fn handle_error(&self, err_value: JSValue) {
         log!("handleError");
         let handlers = self.get_handlers();
@@ -750,13 +783,19 @@ impl<const SSL: bool> NewSocket<SSL> {
         }
         this.ref_();
         // PORT NOTE: reshaped for borrowck — explicit deref at end instead of `defer`.
-        this.internal_flush();
+        let flush_ok = this.internal_flush();
         log!(
             "onWritable buffered_data_for_node_net {}",
             this.buffered_data_for_node_net.get().len()
         );
-        // is not writable if we have buffered data or if we are already detached
-        if this.buffered_data_for_node_net.get().len() > 0 || this.socket.get().is_detached() {
+        // No drain dispatch when: the flush failed fatally (the buffered bytes
+        // were dropped - the close path fails the pending write callback, the
+        // drain callback would wrongly succeed it), there is still buffered
+        // data, or the socket is already detached.
+        if !flush_ok
+            || this.buffered_data_for_node_net.get().len() > 0
+            || this.socket.get().is_detached()
+        {
             this.deref();
             return;
         }
@@ -1383,8 +1422,8 @@ impl<const SSL: bool> NewSocket<SSL> {
             // pending JS write the same way on_writable's tail does, otherwise
             // the do_socket_write backpressure arms the normal writable
             // subscription.
-            this.internal_flush();
-            if this.buffered_data_for_node_net.get().len() == 0 {
+            let flush_ok = this.internal_flush();
+            if flush_ok && this.buffered_data_for_node_net.get().len() == 0 {
                 let drain_callback = handlers.on_writable;
                 if !drain_callback.is_empty() {
                     if let Err(err) = drain_callback.call(&global, this_value, &[this_value]) {
@@ -2323,7 +2362,7 @@ impl<const SSL: bool> NewSocket<SSL> {
             WriteResult::Fail => JSValue::ZERO,
             WriteResult::Success { wrote, total } => {
                 if wrote >= 0 && usize::try_from(wrote).expect("int cast") == total {
-                    this.internal_flush();
+                    let _ = this.internal_flush();
                 }
 
                 JSValue::from(usize::try_from(wrote.max(0)).expect("int cast") == total)
@@ -2732,7 +2771,11 @@ impl<const SSL: bool> NewSocket<SSL> {
             && self.buffered_data_for_node_net.get().len() == 0
     }
 
-    fn internal_flush(&self) {
+    /// Returns `false` when a fatal send error dropped the buffered data:
+    /// the caller must NOT dispatch the JS drain callback - the write did not
+    /// complete, and the close path (driven by the read-side reset) fails the
+    /// pending write callback instead.
+    fn internal_flush(&self) -> bool {
         // R-2: every mutated field is `Cell`/`JsCell`, so `&self` carries no
         // `noalias` for them and the previous `black_box` launder (which
         // mitigated ASM-verified PROVEN_CACHED stale loads of
@@ -2760,10 +2803,13 @@ impl<const SSL: bool> NewSocket<SSL> {
                     // buffer and stop re-arming the writable retry, but do not
                     // close from inside the drain dispatch - the peer reset is
                     // delivered on the read side and tears the socket down on
-                    // a clean stack.
+                    // a clean stack. Report the failure so callers do not
+                    // dispatch the JS drain callback (the write did NOT
+                    // complete; Node fails the callback instead of succeeding
+                    // it).
                     self.buffered_data_for_node_net
                         .with_mut(|b| b.clear_and_free());
-                    return;
+                    return false;
                 }
                 res
             };
@@ -2790,6 +2836,7 @@ impl<const SSL: bool> NewSocket<SSL> {
         if self.can_end_after_flush() {
             self.mark_inactive();
         }
+        true
     }
 
     #[bun_jsc::host_fn(method)]
@@ -2806,7 +2853,7 @@ impl<const SSL: bool> NewSocket<SSL> {
         if this.socket.get().is_detached() {
             return Ok(JSValue::UNDEFINED);
         }
-        this.internal_flush();
+        let _ = this.internal_flush();
         Ok(JSValue::UNDEFINED)
     }
 
@@ -2925,7 +2972,7 @@ impl<const SSL: bool> NewSocket<SSL> {
             WriteResult::Fail => JSValue::ZERO,
             WriteResult::Success { wrote, total } => {
                 if wrote >= 0 && usize::try_from(wrote).expect("int cast") == total {
-                    this.internal_flush();
+                    let _ = this.internal_flush();
                 }
                 JSValue::js_number(wrote as f64)
             }
