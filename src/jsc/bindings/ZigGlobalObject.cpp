@@ -3181,6 +3181,7 @@ extern "C" bool JSGlobalObject__setTimeZone(JSC::JSGlobalObject* globalObject, c
 
     if (WTF::setTimeZoneOverride(Zig::toString(*timeZone))) {
         vm.dateCache.resetIfNecessarySlow();
+        Bun::invalidateLiveDateInstanceCaches(vm);
         return true;
     }
 
