@@ -2990,11 +2990,6 @@ impl RunCommand {
         Ok(true)
     }
 
-    /// Port of `cli.zig`'s `@"bun --eval --print"` — synthetic `cwd/[eval]`
-    /// entry point + boot. `Arguments::parse` has already stashed the script
-    /// in `ctx.runtime_options.eval.script`. Public so `Command::start` can
-    /// route the `-e`/`-p` AutoCommand path here without re-implementing the
-    /// path-buffer dance.
     /// `bun --interactive` — boots the embedded `eval/node-repl.ts` script,
     /// the Node.js-compatible REPL (node:repl). Distinct from `bun repl`,
     /// which is Bun's own native REPL.
@@ -3007,6 +3002,11 @@ impl RunCommand {
         Self::exec_eval(ctx)
     }
 
+    /// Port of `cli.zig`'s `@"bun --eval --print"` — synthetic `cwd/[eval]`
+    /// entry point + boot. `Arguments::parse` has already stashed the script
+    /// in `ctx.runtime_options.eval.script`. Public so `Command::start` can
+    /// route the `-e`/`-p` AutoCommand path here without re-implementing the
+    /// path-buffer dance.
     pub fn exec_eval(ctx: &mut ContextData) -> Result<(), bun_core::Error> {
         // Zig: `ctx.passthrough = concat(ctx.positionals, ctx.passthrough)`.
         // PORT NOTE: prepend positionals into the existing passthrough vec
