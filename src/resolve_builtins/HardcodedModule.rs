@@ -83,6 +83,10 @@ pub enum HardcodedModule {
     NodeStream,
     #[strum(serialize = "node:stream/consumers")]
     NodeStreamConsumers,
+    #[strum(serialize = "node:stream/iter")]
+    NodeStreamIter,
+    #[strum(serialize = "node:zlib/iter")]
+    NodeZlibIter,
     #[strum(serialize = "node:stream/promises")]
     NodeStreamPromises,
     #[strum(serialize = "node:stream/web")]
@@ -232,6 +236,8 @@ impl HardcodedModule {
         b"node:repl" => HardcodedModule::NodeRepl,
         b"node:stream" => HardcodedModule::NodeStream,
         b"node:stream/consumers" => HardcodedModule::NodeStreamConsumers,
+        b"node:stream/iter" => HardcodedModule::NodeStreamIter,
+        b"node:zlib/iter" => HardcodedModule::NodeZlibIter,
         b"node:stream/promises" => HardcodedModule::NodeStreamPromises,
         b"node:stream/web" => HardcodedModule::NodeStreamWeb,
         b"node:string_decoder" => HardcodedModule::NodeStringDecoder,
@@ -413,6 +419,8 @@ const COMMON_ALIAS_KVS: &[AliasKv] = &[
     node_entry!("node:repl"),
     node_entry!("node:stream"),
     node_entry!("node:stream/consumers"),
+    node_entry!("node:stream/iter"),
+    node_entry!("node:zlib/iter"),
     node_entry!("node:stream/promises"),
     node_entry!("node:stream/web"),
     node_entry!("node:string_decoder"),
@@ -469,6 +477,8 @@ const COMMON_ALIAS_KVS: &[AliasKv] = &[
     node_entry!("repl"),
     node_entry!("stream"),
     node_entry!("stream/consumers"),
+    node_entry!("stream/iter"),
+    node_entry!("zlib/iter"),
     node_entry!("stream/promises"),
     node_entry!("stream/web"),
     node_entry!("string_decoder"),
@@ -787,6 +797,16 @@ const BUN_TEST_ALIASES: &[&[AliasKv]] = &[
     BUN_TEST_EXTRA_ALIAS_KVS,
 ];
 
+/// `--experimental-stream-iter` (node parity): `stream/iter` resolves as a
+/// builtin only when the flag was passed on the CLI.
+pub fn stream_iter_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::args().any(|a| a == "--experimental-stream-iter")
+            || std::env::var_os("BUN_EXPERIMENTAL_STREAM_ITER").is_some_and(|v| v == "1")
+    })
+}
+
 #[inline]
 fn lookup(tables: &[&[AliasKv]], name: &[u8]) -> Option<Alias> {
     // PERF(port): O(n) scan; could replace with a phf perfect-hash lookup.
@@ -811,6 +831,18 @@ impl Alias {
     }
 
     pub fn get(name: &[u8], target: Target, cfg: Cfg) -> Option<Alias> {
+        // Without `--experimental-stream-iter` the aliases stay invisible so
+        // the bare specifier falls through to filesystem resolution
+        // ("Cannot find module") and the node:-prefixed one reports
+        // "No such built-in module", matching node.
+        if (name == b"stream/iter"
+            || name == b"node:stream/iter"
+            || name == b"zlib/iter"
+            || name == b"node:zlib/iter")
+            && !stream_iter_enabled()
+        {
+            return None;
+        }
         if target.is_bun() {
             if cfg.rewrite_jest_for_tests {
                 return lookup(BUN_TEST_ALIASES, name);
