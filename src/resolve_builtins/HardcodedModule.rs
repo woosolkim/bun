@@ -1,7 +1,7 @@
-use bun_ast::Target;
 use bun_ast::import_record;
-use bun_core::ZStr;
+use bun_ast::Target;
 use bun_core::zstr;
+use bun_core::ZStr;
 
 // Zig: `const string = []const u8;` — in Rust we use `&'static [u8]` directly for keys.
 
@@ -801,10 +801,7 @@ const BUN_TEST_ALIASES: &[&[AliasKv]] = &[
 /// builtin only when the flag was passed on the CLI.
 pub fn stream_iter_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::args().any(|a| a == "--experimental-stream-iter")
-            || std::env::var_os("BUN_EXPERIMENTAL_STREAM_ITER").is_some_and(|v| v == "1")
-    })
+    *ENABLED.get_or_init(|| std::env::args().any(|a| a == "--experimental-stream-iter"))
 }
 
 #[inline]
